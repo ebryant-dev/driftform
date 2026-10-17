@@ -28,6 +28,8 @@ export interface RingShape {
   pts: Float32Array;
   c: [number, number, number];
   N: [number, number, number];
+  /** Point indices never drawn (still part of the outline that hides what's behind). */
+  hide?: number[];
 }
 
 /**

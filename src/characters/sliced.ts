@@ -16,6 +16,7 @@ export interface SlicedCharacterData {
     T: number[];
     N: number[];
     pts: number[];
+    hide?: number[];
   }[];
 }
 
@@ -50,7 +51,7 @@ export function fromSlices(data: SlicedCharacterData, { density }: CharacterPara
       b: r.b,
       t: r.t,
       radius,
-      shape: { pts: new Float32Array(r.pts), c: v3(r.c), N: v3(r.N) },
+      shape: { pts: new Float32Array(r.pts), c: v3(r.c), N: v3(r.N), hide: r.hide },
     });
   });
 

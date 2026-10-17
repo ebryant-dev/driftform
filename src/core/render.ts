@@ -63,6 +63,8 @@ export class Renderer {
   private view = new Float32Array(0); // xyz, view space
   private screen = new Float32Array(0); // xy, CSS px
   private facing = new Float32Array(0); // > 0 faces the eye
+  private hidden = new Uint8Array(0); // 1 = never drawn
+  private vis = new Float32Array(0); // what this paint pass treats as visible (> 0)
   private run = new Float32Array(0); // scratch for one visible run
 
   constructor(
@@ -136,6 +138,8 @@ export class Renderer {
     this.view = new Float32Array(total * 3);
     this.screen = new Float32Array(total * 2);
     this.facing = new Float32Array(total);
+    this.hidden = new Uint8Array(total);
+    this.vis = new Float32Array(total);
     this.run = new Float32Array((maxSize + 2) * 2);
 
     // Rest centers: the sculpted center when there is one, else the node lerp.
@@ -165,6 +169,7 @@ export class Renderer {
       const o = this.start[i] * 2;
       if (r.shape) {
         this.shape.set(r.shape.pts, o);
+        for (const k of r.shape.hide ?? []) this.hidden[this.start[i] + k] = 1;
       } else {
         for (let k = 0; k < CIRCLE_POINTS; k++) {
           const a = (k / CIRCLE_POINTS) * Math.PI * 2;
@@ -335,20 +340,41 @@ export class Renderer {
     return Math.max(0, Math.min(BUCKETS - 1, Math.floor(this.near[i] * BUCKETS)));
   }
 
-  /** The whole ring as one closed run. */
+  /** The whole ring as one closed run (minus any hidden points). */
   private addWhole(i: number, lineWidth: number) {
+    const s0 = this.start[i], m = this.size[i];
+    let anyHidden = false;
+    for (let k = 0; k < m; k++) {
+      this.vis[s0 + k] = this.hidden[s0 + k] ? -1 : 1;
+      if (this.hidden[s0 + k]) anyHidden = true;
+    }
+    if (anyHidden) {
+      this.addRuns(i, lineWidth);
+      return;
+    }
+    this.addClosed(i, lineWidth);
+  }
+
+  private addClosed(i: number, lineWidth: number) {
     const m = this.size[i];
     this.mark.addRun(this.ctx, this.screen.subarray(this.start[i] * 2, (this.start[i] + m) * 2), m, true, lineWidth);
   }
 
-  /** Each stretch of the ring that faces the eye, with ends trimmed to where facing crosses zero. */
+  /** Each stretch of the ring that faces the eye and isn't hidden. */
   private addVisible(i: number, lineWidth: number) {
-    const { facing, screen, run } = this;
+    const s0 = this.start[i], m = this.size[i];
+    for (let k = 0; k < m; k++) this.vis[s0 + k] = this.hidden[s0 + k] ? -1 : this.facing[s0 + k];
+    this.addRuns(i, lineWidth);
+  }
+
+  /** Each stretch where `vis` > 0, with ends trimmed to where it crosses zero. */
+  private addRuns(i: number, lineWidth: number) {
+    const { vis: facing, screen, run } = this;
     const s0 = this.start[i], m = this.size[i];
     let firstHidden = -1;
     for (let k = 0; k < m; k++) if (facing[s0 + k] <= 0) { firstHidden = k; break; }
     if (firstHidden < 0) {
-      this.addWhole(i, lineWidth);
+      this.addClosed(i, lineWidth);
       return;
     }
     let n = 0;

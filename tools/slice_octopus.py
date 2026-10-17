@@ -40,7 +40,19 @@ ARM_RINGS = 46
 ARM_POINTS = 20
 BODY_NODES = 10
 ARM_NODES = 14
+ARM_S_START = 0.03         # arm roots: sliced from the bare arm tube where the full sculpt merges into the web
 ARM_S_END = 0.985          # stop just short of the tip cap
+WEB_CAP = 1.5              # web lobes reaching past this × the ring's median radius are pulled in and hidden
+EYE_POINTS = 24
+EYE_MAX_RADIUS = 0.085     # topographic eye rings stop once they spread wider than this
+EYE_STEP = 0.006           # depth between eye rings, down from the turret's apex
+# Eye turrets, found by raycasting the approved sculpt from a top view through
+# the two visible bulges (Blender coords: surface hit point, outward normal).
+EYES = [
+    dict(name="eyeL", hit=(-0.1228, 0.0, 0.4282), normal=(-0.272, -0.34, 0.9)),
+    dict(name="eyeR", hit=(0.0929, 0.0037, 0.4228), normal=(0.192, -0.509, 0.839)),
+]
+PUPIL = (0.007, 0.03)      # slit pupil half-size across N (vertical-ish) and B (horizontal)
 ARM_MAX_RATIO = 1.8        # skip arm slices that still run into the body/web
 
 
@@ -255,6 +267,7 @@ def to_engine(v):
 
 def main():
     fverts, ftris = mesh_arrays("octopus_fused")
+    averts, atris = mesh_arrays("octopus_arms")
     bverts, btris = mesh_arrays("octopus_body")
     arms, arm_radius = arm_centerlines()
     crown = np.asarray(arm_centerlines_crown())
@@ -293,7 +306,14 @@ def main():
         if p2 is None or len(p2) < 3:
             continue
         a, b, t = attach(bfirst, BODY_NODES, u)
-        rings.append(dict(part=bpi, u=float(u), a=a, b=b, t=t, c=c, T=T[i], N=N[i], pts=resample(p2, BODY_POINTS)))
+        pts = resample(p2, BODY_POINTS)
+        # Web lobes that run out along the arms read as stray lines: pull them in and hide them.
+        rad = np.linalg.norm(pts, axis=1)
+        cap = WEB_CAP * float(np.median(rad))
+        over = rad > cap
+        pts[over] *= (cap / rad[over])[:, None]
+        rings.append(dict(part=bpi, u=float(u), a=a, b=b, t=t, c=c, T=T[i], N=N[i], pts=pts,
+                          hide=set(np.nonzero(over)[0].tolist())))
         kept += 1
     # Drop outliers: a slice that grabbed a much bigger loop than its neighbors.
     body_rings = [r for r in rings if r["part"] == bpi]
@@ -311,7 +331,7 @@ def main():
     for k, line in enumerate(arms):
         api, afirst = add_part(f"arm{k}", line, ARM_NODES)
         links.append((crown_node, afirst))
-        us = np.linspace(0, ARM_S_END, ARM_RINGS)
+        us = np.linspace(ARM_S_START, ARM_S_END, ARM_RINGS)
         centers = sample_polyline(line, us)
         T, N = frames(centers)
         kept = 0
@@ -319,11 +339,59 @@ def main():
             B = np.cross(T[i], N[i])
             p2 = pick_loop(slice_loops(fverts, ftris, c, T[i]), c, N[i], B)
             if p2 is None or len(p2) < 3 or max_radius(p2) > ARM_MAX_RATIO * arm_radius(u):
-                continue
+                # Near the root the cut runs into the web; the bare arm tube gives the arm's own contour.
+                p2 = pick_loop(slice_loops(averts, atris, c, T[i]), c, N[i], B)
+                if p2 is None or len(p2) < 3 or max_radius(p2) > ARM_MAX_RATIO * arm_radius(u):
+                    continue
             a, b, t = attach(afirst, ARM_NODES, u)
             rings.append(dict(part=api, u=float(u), a=a, b=b, t=t, c=c, T=T[i], N=N[i], pts=resample(p2, ARM_POINTS)))
             kept += 1
         print(f"arm{k}: {kept}/{ARM_RINGS} rings")
+
+    # Eyes: topographic rings around each turret, down from its apex, plus a slit pupil.
+    eye_spots = []
+    for e in EYES:
+        hit, n = np.asarray(e["hit"]), np.asarray(e["normal"], dtype=np.float64)
+        n /= np.linalg.norm(n)
+        near = fverts[np.linalg.norm(fverts - hit, axis=1) < 0.09]
+        apex = near[np.argmax((near - hit) @ n)]
+        loops = []
+        h = EYE_STEP * 0.5
+        while True:
+            c = apex - n * h
+            Tn, Nn = frames(np.array([c - n * 0.01, c, c + n * 0.01]))
+            Ne = Nn[1]
+            Be = np.cross(n, Ne)
+            p2 = pick_loop(slice_loops(fverts, ftris, c, n), c, Ne, Be)
+            if p2 is None or len(p2) < 3 or max_radius(p2) > EYE_MAX_RADIUS:
+                break
+            loops.append((c, Ne, resample(p2, EYE_POINTS)))
+            h += EYE_STEP
+        if not loops:
+            print(f"{e['name']}: no rings")
+            continue
+        loops.reverse()  # base first, apex last
+        api, afirst = add_part(e["name"], np.array([loops[0][0], apex + n * 0.004]), 2)
+        links.append((bfirst + int(np.argmin([np.linalg.norm(nodes[bfirst + k] - apex) for k in range(BODY_NODES)])), afirst))
+        total = len(loops) + 1
+        for j, (c, Ne, pts) in enumerate(loops):
+            u = j / (total - 1)
+            rings.append(dict(part=api, u=u, a=afirst, b=afirst + 1, t=u, c=c, T=n, N=Ne, pts=pts, hide=set()))
+        ang = np.linspace(0, 2 * np.pi, EYE_POINTS, endpoint=False)
+        slit = np.stack([PUPIL[0] * np.cos(ang), PUPIL[1] * np.sin(ang)], axis=1)
+        c = apex + n * 0.004
+        rings.append(dict(part=api, u=1.0, a=afirst, b=afirst + 1, t=1.0, c=c, T=n, N=loops[-1][1], pts=slit, hide=set()))
+        eye_spots.append((apex, max_radius(loops[0][2]) * 1.15))
+        print(f"{e['name']}: {len(loops)} rings + pupil, base radius {max_radius(loops[0][2]):.3f}")
+
+    # Body contours crossing an eye are hidden there, so the eye reads cleanly.
+    for r in rings:
+        if parts[r["part"]] != "body":
+            continue
+        Bv = np.cross(r["T"], r["N"])
+        p3 = r["c"] + np.outer(r["pts"][:, 0], r["N"]) + np.outer(r["pts"][:, 1], Bv)
+        for apex, rad in eye_spots:
+            r["hide"] |= set(np.nonzero(np.linalg.norm(p3 - apex, axis=1) < rad)[0].tolist())
 
     r4 = lambda a: [round(float(x), 4) for x in np.asarray(a).ravel()]
     out = {
@@ -337,6 +405,7 @@ def main():
                 "part": r["part"], "u": round(r["u"], 4), "a": r["a"], "b": r["b"], "t": round(r["t"], 4),
                 "c": r4(to_engine(r["c"])), "T": r4(to_engine(r["T"])), "N": r4(to_engine(r["N"])),
                 "pts": r4(r["pts"]),
+                **({"hide": sorted(r["hide"])} if r.get("hide") else {}),
             }
             for r in rings
         ],
