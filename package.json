@@ -1,0 +1,25 @@
+{
+  "name": "driftform",
+  "version": "0.1.0",
+  "private": false,
+  "license": "UNLICENSED",
+  "description": "Driftform: an interactive generative-art piece. A character of loosely held contour rings floats in an invisible medium.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lil-gui": "^0.21.0",
+    "simplex-noise": "^4.0.3"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
