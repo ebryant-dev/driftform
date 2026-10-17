@@ -36,13 +36,17 @@ OUT = argv[0] if argv else "octopus.rings.json"
 # Tuning: rings per part and contour points per ring.
 BODY_RINGS = 80
 BODY_POINTS = 120
-ARM_RINGS = 46
 ARM_POINTS = 20
 BODY_NODES = 10
 ARM_NODES = 14
 ARM_S_START = 0.03         # arm roots: sliced from the bare arm tube where the full sculpt merges into the web
 ARM_S_END = 0.985          # stop just short of the tip cap
-WEB_CAP = 1.5              # web lobes reaching past this × the ring's median radius are pulled in and hidden
+WEB_CAP = 1.25             # web lobes reaching past this × the ring's median radius get pulled in to the median and hidden,
+                           # so they neither draw beside the arms nor erase the arm roots underneath
+MIN_RUN = 4                # visible fragments of a body ring shorter than this many points are hidden too
+ARM_STEP_K = 0.45          # arm ring spacing as a fraction of the local arm radius, so curled tips stay dense
+ARM_STEP_MAX = 0.03        # but never sparser than this near the thick root
+ARM_STEP_FLOOR_R = 0.02    # radius floor for spacing, so the very tip doesn't pile up rings
 EYE_POINTS = 24
 EYE_MAX_RADIUS = 0.085     # topographic eye rings stop once they spread wider than this
 EYE_STEP = 0.006           # depth between eye rings, down from the turret's apex
@@ -309,9 +313,9 @@ def main():
         pts = resample(p2, BODY_POINTS)
         # Web lobes that run out along the arms read as stray lines: pull them in and hide them.
         rad = np.linalg.norm(pts, axis=1)
-        cap = WEB_CAP * float(np.median(rad))
-        over = rad > cap
-        pts[over] *= (cap / rad[over])[:, None]
+        med = float(np.median(rad))
+        over = rad > WEB_CAP * med
+        pts[over] *= (med / rad[over])[:, None]
         rings.append(dict(part=bpi, u=float(u), a=a, b=b, t=t, c=c, T=T[i], N=N[i], pts=pts,
                           hide=set(np.nonzero(over)[0].tolist())))
         kept += 1
@@ -331,7 +335,13 @@ def main():
     for k, line in enumerate(arms):
         api, afirst = add_part(f"arm{k}", line, ARM_NODES)
         links.append((crown_node, afirst))
-        us = np.linspace(ARM_S_START, ARM_S_END, ARM_RINGS)
+        # Ring spacing follows the arm's radius, so the thin curled tips stay as dense as the root.
+        length = float(np.sum(np.linalg.norm(np.diff(line, axis=0), axis=1)))
+        us, s_ = [], ARM_S_START
+        while s_ <= ARM_S_END:
+            us.append(s_)
+            s_ += min(ARM_STEP_MAX, ARM_STEP_K * max(arm_radius(s_), ARM_STEP_FLOOR_R)) / length
+        us = np.array(us)
         centers = sample_polyline(line, us)
         T, N = frames(centers)
         kept = 0
@@ -346,7 +356,7 @@ def main():
             a, b, t = attach(afirst, ARM_NODES, u)
             rings.append(dict(part=api, u=float(u), a=a, b=b, t=t, c=c, T=T[i], N=N[i], pts=resample(p2, ARM_POINTS)))
             kept += 1
-        print(f"arm{k}: {kept}/{ARM_RINGS} rings")
+        print(f"arm{k}: {kept}/{len(us)} rings")
 
     # Eyes: topographic rings around each turret, down from its apex, plus a slit pupil.
     eye_spots = []
@@ -392,6 +402,24 @@ def main():
         p3 = r["c"] + np.outer(r["pts"][:, 0], r["N"]) + np.outer(r["pts"][:, 1], Bv)
         for apex, rad in eye_spots:
             r["hide"] |= set(np.nonzero(np.linalg.norm(p3 - apex, axis=1) < rad)[0].tolist())
+        # Hiding leaves short leftover fragments; they read as stray stubs, so hide them too.
+        m = len(r["pts"])
+        if r["hide"] and len(r["hide"]) < m:
+            start = next(k for k in range(m) if k in r["hide"])
+            runs, cur = [], []
+            for j in range(1, m + 1):
+                k = (start + j) % m
+                if k in r["hide"]:
+                    if cur:
+                        runs.append(cur)
+                    cur = []
+                else:
+                    cur.append(k)
+            if cur:
+                runs.append(cur)
+            for run in runs:
+                if len(run) < MIN_RUN:
+                    r["hide"] |= set(run)
 
     r4 = lambda a: [round(float(x), 4) for x in np.asarray(a).ravel()]
     out = {
