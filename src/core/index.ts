@@ -1,6 +1,6 @@
 import { characters, type CharacterDef } from '../characters';
 import { Loop } from './loop';
-import { ellipseMark } from './marks/ellipse';
+import { lineMark } from './marks/line';
 import { defaultOptions, merge, type ExperienceOptions, type ExperienceOptionsInput } from './options';
 import { Renderer } from './render';
 
@@ -31,7 +31,7 @@ export function createExperience(container: HTMLElement, input: ExperienceOption
   canvas.style.cssText = 'display:block;width:100%;height:100%;';
   container.appendChild(canvas);
 
-  const renderer = new Renderer(canvas, ellipseMark);
+  const renderer = new Renderer(canvas, lineMark);
   let character: CharacterDef;
   let pos: Float32Array;
 

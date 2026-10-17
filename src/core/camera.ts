@@ -22,7 +22,7 @@ export class Camera {
     this.sy = Math.sin(settings.yaw);
     this.cp = Math.cos(settings.pitch);
     this.sp = Math.sin(settings.pitch);
-    this.distance = Math.max(settings.distance, extent * 1.5);
+    this.distance = Math.max(settings.distance, 1.2) * extent;
     this.center = center;
     this.ppu = (Math.min(width, height) * 0.5 * settings.framing) / extent;
     this.cx = width / 2;

@@ -1,35 +1,34 @@
 import type { CharacterDef } from '../characters';
 import type { Settings } from './options';
-import type { MarkStyle, ProjectedRing } from './marks/types';
+import type { MarkStyle } from './marks/types';
 import { Camera } from './camera';
 import { hexToRgb, lerp } from './math';
 
 /** Depth buckets: stroke color, alpha and width are quantized to this many steps. */
 const BUCKETS = 12;
-const TAU = Math.PI * 2;
+/** Points on a ring that has no sculpted shape (drawn as a circle). */
+const CIRCLE_POINTS = 24;
 
 interface BucketStyle {
   color: string;
   lineWidth: number;
 }
 
-interface RingTopology {
-  /** Neighboring rings on the same part (-1 at the ends). */
-  prev: number;
-  next: number;
-  /** How fast the body widens along the ring's normal (dr/ds), from the rest pose. */
-  taper: number;
-}
-
 /**
- * Projects each ring to a screen-space ellipse and paints them back to front.
+ * Projects each ring's contour into screen space and paints rings back to front.
+ *
+ * Every ring is a closed curve in its own plane (ADR 0002). Each frame the
+ * plane follows the body: its center rides between two nodes, its axis T
+ * runs between the neighboring rings' centers, and its N axis is carried
+ * along by the smallest rotation from rest. Surface normals come from the
+ * ring grid itself (around the ring × along the body), so they stay right as
+ * the body deforms.
  *
  * Two looks:
- * - ghost: every ring is a full ellipse, so the body reads as see-through.
- * - solid: the body is opaque. Each ring shows only the arc on the side
- *   facing the eye, and as rings are painted back to front each one first
- *   erases its cross-section and the band of body between it and its
- *   neighbor, hiding whatever lies behind.
+ * - ghost: every ring drawn whole, so the body reads as see-through.
+ * - solid: the body is opaque. Each ring shows only the stretches that face
+ *   the eye, and as rings paint back to front each one first erases its
+ *   cross-section and the band of body between it and its nearer neighbor.
  *
  * Owns the canvas pixels (size, devicePixelRatio) but not the page.
  */
@@ -40,15 +39,31 @@ export class Renderer {
   private height = 0;
   private dpr = 1;
   private styles: BucketStyle[] = [];
-  private projected: ProjectedRing[] = [];
-  private topo: RingTopology[] = [];
+
+  // Per ring.
+  private count = 0;
+  private start = new Int32Array(0); // first point index
+  private size = new Int32Array(0); // point count
+  private prev = new Int32Array(0); // neighbor ring on the same part, or -1
+  private next = new Int32Array(0);
+  private offset = new Float32Array(0); // rest center minus rest node lerp
+  private restT = new Float32Array(0);
+  private restN = new Float32Array(0);
+  private worldC = new Float32Array(0); // world space, this frame
+  private center = new Float32Array(0); // view space, this frame
+  private axis = new Float32Array(0); // view space T, this frame
   private depth = new Float32Array(0);
-  /** Screen-space ends of each ring's major axis: the body's silhouette at that ring. */
-  private ends = new Float32Array(0);
-  private visible = new Uint8Array(0);
-  private centers = new Float32Array(0);
+  private near = new Float32Array(0);
+  private silL = new Int32Array(0); // silhouette point indices, this frame
+  private silR = new Int32Array(0);
   private order: number[] = [];
-  private v = new Float32Array(6);
+
+  // Per point.
+  private shape = new Float32Array(0); // x, y in the ring plane
+  private view = new Float32Array(0); // xyz, view space
+  private screen = new Float32Array(0); // xy, CSS px
+  private facing = new Float32Array(0); // > 0 faces the eye
+  private run = new Float32Array(0); // scratch for one visible run
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -91,34 +106,97 @@ export class Renderer {
   setCharacter(character: CharacterDef) {
     const { rings, rest } = character;
     const n = rings.length;
-    this.projected = Array.from({ length: n }, () => ({
-      x: 0, y: 0, major: 0, minor: 0, rotation: 0, near: 0, arcStart: 0, arcEnd: TAU,
-    }));
+    this.count = n;
+    this.start = new Int32Array(n);
+    this.size = new Int32Array(n);
+    this.prev = new Int32Array(n);
+    this.next = new Int32Array(n);
+    this.offset = new Float32Array(n * 3);
+    this.restT = new Float32Array(n * 3);
+    this.restN = new Float32Array(n * 3);
+    this.center = new Float32Array(n * 3);
+    this.axis = new Float32Array(n * 3);
     this.depth = new Float32Array(n);
-    this.ends = new Float32Array(n * 4);
-    this.visible = new Uint8Array(n);
-    this.centers = new Float32Array(n * 3);
+    this.near = new Float32Array(n);
+    this.silL = new Int32Array(n);
+    this.silR = new Int32Array(n);
     this.order = Array.from({ length: n }, (_, i) => i);
 
-    // Rest-pose ring centers, to measure each ring's taper.
-    const centers = rings.map((r) => {
-      const a = r.a * 3, b = r.b * 3;
-      return [0, 1, 2].map((k) => lerp(rest[a + k], rest[b + k], r.t));
+    let total = 0;
+    let maxSize = 0;
+    rings.forEach((r, i) => {
+      this.start[i] = total;
+      this.size[i] = r.shape ? r.shape.pts.length / 2 : CIRCLE_POINTS;
+      total += this.size[i];
+      maxSize = Math.max(maxSize, this.size[i]);
+      this.prev[i] = i > 0 && rings[i - 1].part === r.part ? i - 1 : -1;
+      this.next[i] = i < n - 1 && rings[i + 1].part === r.part ? i + 1 : -1;
     });
-    this.topo = rings.map((r, i) => {
-      const prev = i > 0 && rings[i - 1].part === r.part ? i - 1 : -1;
-      const next = i < n - 1 && rings[i + 1].part === r.part ? i + 1 : -1;
-      const lo = prev >= 0 ? prev : i;
-      const hi = next >= 0 ? next : i;
-      const ds = Math.hypot(...[0, 1, 2].map((k) => centers[hi][k] - centers[lo][k]));
-      const taper = lo !== hi && ds > 1e-6 ? (rings[hi].radius - rings[lo].radius) / ds : 0;
-      return { prev, next, taper };
+    this.shape = new Float32Array(total * 2);
+    this.view = new Float32Array(total * 3);
+    this.screen = new Float32Array(total * 2);
+    this.facing = new Float32Array(total);
+    this.run = new Float32Array((maxSize + 2) * 2);
+
+    // Rest centers: the sculpted center when there is one, else the node lerp.
+    const lerpRest = (i: number, k: number) => {
+      const r = rings[i];
+      return rest[r.a * 3 + k] + (rest[r.b * 3 + k] - rest[r.a * 3 + k]) * r.t;
+    };
+    const restC = new Float32Array(n * 3);
+    rings.forEach((r, i) => {
+      for (let k = 0; k < 3; k++) {
+        restC[i * 3 + k] = r.shape ? r.shape.c[k] : lerpRest(i, k);
+        this.offset[i * 3 + k] = restC[i * 3 + k] - lerpRest(i, k);
+      }
+    });
+
+    rings.forEach((r, i) => {
+      // Rest T exactly as draw() computes it each frame, so at rest nothing rotates.
+      const T = this.axisFrom(restC, i, rest, rings);
+      this.restT.set(T, i * 3);
+      // Rest N: the sculpted one, or any direction across T, made perpendicular to T.
+      let N = r.shape ? r.shape.N : Math.abs(T[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+      const d = N[0] * T[0] + N[1] * T[1] + N[2] * T[2];
+      N = [N[0] - T[0] * d, N[1] - T[1] * d, N[2] - T[2] * d];
+      const l = Math.hypot(N[0], N[1], N[2]) || 1;
+      this.restN.set([N[0] / l, N[1] / l, N[2] / l], i * 3);
+
+      const o = this.start[i] * 2;
+      if (r.shape) {
+        this.shape.set(r.shape.pts, o);
+      } else {
+        for (let k = 0; k < CIRCLE_POINTS; k++) {
+          const a = (k / CIRCLE_POINTS) * Math.PI * 2;
+          this.shape[o + k * 2] = Math.cos(a) * r.radius;
+          this.shape[o + k * 2 + 1] = Math.sin(a) * r.radius;
+        }
+      }
     });
   }
 
+  /** Unit axis along the body at ring i: from the previous ring's center to the next one's. */
+  private axisFrom(centers: Float32Array, i: number, pos: Float32Array, rings: CharacterDef['rings']): number[] {
+    const p = this.prev[i], q = this.next[i];
+    let x: number, y: number, z: number;
+    if (p >= 0 || q >= 0) {
+      const lo = (p >= 0 ? p : i) * 3, hi = (q >= 0 ? q : i) * 3;
+      x = centers[hi] - centers[lo];
+      y = centers[hi + 1] - centers[lo + 1];
+      z = centers[hi + 2] - centers[lo + 2];
+    } else {
+      const a = rings[i].a * 3, b = rings[i].b * 3;
+      x = pos[b] - pos[a];
+      y = pos[b + 1] - pos[a + 1];
+      z = pos[b + 2] - pos[a + 2];
+    }
+    const l = Math.hypot(x, y, z) || 1;
+    return [x / l, y / l, z / l];
+  }
+
   draw(character: CharacterDef, pos: Float32Array, settings: Settings, transparent: boolean) {
-    const { ctx } = this;
-    this.camera.update(settings.camera, this.width, this.height, character.center, character.extent);
+    const { ctx, camera } = this;
+    camera.update(settings.camera, this.width, this.height, character.center, character.extent);
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
@@ -129,130 +207,179 @@ export class Renderer {
       ctx.fillRect(0, 0, this.width, this.height);
     }
 
-    const { dMin, dMax } = this.project(character, pos, settings.solid);
+    this.project(character, pos);
+    this.shade();
 
     // Back to front.
     const depth = this.depth;
     this.order.sort((i, j) => depth[j] - depth[i]);
+    let dMin = Infinity, dMax = -Infinity;
+    for (let i = 0; i < this.count; i++) {
+      if (depth[i] < dMin) dMin = depth[i];
+      if (depth[i] > dMax) dMax = depth[i];
+    }
     const span = dMax - dMin || 1;
-    for (const i of this.order) this.projected[i].near = (dMax - depth[i]) / span;
+    for (let i = 0; i < this.count; i++) this.near[i] = (dMax - depth[i]) / span;
 
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     if (settings.solid) this.paintSolid(settings.colors.background, transparent);
     else this.paintGhost();
   }
 
-  /** Project every ring into `projected`, `depth`, `ends` and `visible`. */
-  private project(character: CharacterDef, pos: Float32Array, solid: boolean) {
-    const { camera, v } = this;
+  /** Place every ring's contour in view space and on screen. */
+  private project(character: CharacterDef, pos: Float32Array) {
+    const camera = this.camera;
     const rings = character.rings;
-    let dMin = Infinity;
-    let dMax = -Infinity;
+    const n = this.count;
 
-    // Ring centers first, so each ring's normal can follow its neighbors:
-    // the line from the previous ring's center to the next one's. That bends
-    // smoothly along the body instead of jumping at every node.
-    const wc = this.centers;
-    for (let i = 0; i < rings.length; i++) {
+    // World centers this frame.
+    if (this.worldC.length !== n * 3) this.worldC = new Float32Array(n * 3);
+    const wc = this.worldC;
+    for (let i = 0; i < n; i++) {
       const r = rings[i];
-      const a = r.a * 3, b = r.b * 3;
-      for (let k = 0; k < 3; k++) wc[i * 3 + k] = pos[a + k] + (pos[b + k] - pos[a + k]) * r.t;
+      for (let k = 0; k < 3; k++) {
+        wc[i * 3 + k] = pos[r.a * 3 + k] + (pos[r.b * 3 + k] - pos[r.a * 3 + k]) * r.t + this.offset[i * 3 + k];
+      }
     }
 
-    for (let i = 0; i < rings.length; i++) {
-      const r = rings[i];
-      const { prev, next } = this.topo[i];
-      let nx: number, ny: number, nz: number;
-      if (prev >= 0 || next >= 0) {
-        const lo = (prev >= 0 ? prev : i) * 3, hi = (next >= 0 ? next : i) * 3;
-        nx = wc[hi] - wc[lo]; ny = wc[hi + 1] - wc[lo + 1]; nz = wc[hi + 2] - wc[lo + 2];
-      } else {
-        const a = r.a * 3, b = r.b * 3;
-        nx = pos[b] - pos[a]; ny = pos[b + 1] - pos[a + 1]; nz = pos[b + 2] - pos[a + 2];
+    for (let i = 0; i < n; i++) {
+      const T = this.axisFrom(wc, i, pos, rings);
+      // Carry N along by the smallest rotation taking rest T to this T.
+      const a0 = this.restT[i * 3], a1 = this.restT[i * 3 + 1], a2 = this.restT[i * 3 + 2];
+      const v0 = this.restN[i * 3], v1 = this.restN[i * 3 + 1], v2 = this.restN[i * 3 + 2];
+      const c = a0 * T[0] + a1 * T[1] + a2 * T[2];
+      const k0 = a1 * T[2] - a2 * T[1], k1 = a2 * T[0] - a0 * T[2], k2 = a0 * T[1] - a1 * T[0];
+      const kv = k0 * v0 + k1 * v1 + k2 * v2;
+      const f = c > -0.999 ? kv / (1 + c) : 0;
+      let N0 = v0 * c + (k1 * v2 - k2 * v1) + k0 * f;
+      let N1 = v1 * c + (k2 * v0 - k0 * v2) + k1 * f;
+      let N2 = v2 * c + (k0 * v1 - k1 * v0) + k2 * f;
+      const nl = Math.hypot(N0, N1, N2) || 1;
+      N0 /= nl; N1 /= nl; N2 /= nl;
+      const B0 = T[1] * N2 - T[2] * N1, B1 = T[2] * N0 - T[0] * N2, B2 = T[0] * N1 - T[1] * N0;
+
+      const cx = wc[i * 3], cy = wc[i * 3 + 1], cz = wc[i * 3 + 2];
+      camera.toView(cx, cy, cz, this.center, i * 3);
+      camera.rotate(T[0], T[1], T[2], this.axis, i * 3);
+      this.depth[i] = camera.distance - this.center[i * 3 + 2];
+
+      const s0 = this.start[i], m = this.size[i];
+      for (let k = 0; k < m; k++) {
+        const x = this.shape[(s0 + k) * 2], y = this.shape[(s0 + k) * 2 + 1];
+        camera.toView(cx + N0 * x + B0 * y, cy + N1 * x + B1 * y, cz + N2 * x + B2 * y, this.view, (s0 + k) * 3);
+        const vx = this.view[(s0 + k) * 3], vy = this.view[(s0 + k) * 3 + 1], vz = this.view[(s0 + k) * 3 + 2];
+        const s = camera.distance / (camera.distance - vz);
+        this.screen[(s0 + k) * 2] = camera.cx + vx * s * camera.ppu;
+        this.screen[(s0 + k) * 2 + 1] = camera.cyScreen - vy * s * camera.ppu;
       }
+    }
+  }
 
-      camera.toView(wc[i * 3], wc[i * 3 + 1], wc[i * 3 + 2], v, 0);
-      camera.rotate(nx, ny, nz, v, 3);
+  /**
+   * Which points face the eye, from the ring grid's surface normal; and each
+   * ring's silhouette points (widest across the body, on screen) for bands.
+   */
+  private shade() {
+    const { view, screen, facing } = this;
+    const dist = this.camera.distance;
+    for (let i = 0; i < this.count; i++) {
+      const s0 = this.start[i], m = this.size[i];
+      const p = this.prev[i], q = this.next[i];
+      const lo = p >= 0 && this.size[p] === m ? p : i;
+      const hi = q >= 0 && this.size[q] === m ? q : i;
+      const cx = this.center[i * 3], cy = this.center[i * 3 + 1], cz = this.center[i * 3 + 2];
+      // Fallback "along the body" direction for rings without a matching neighbor.
+      const ax = this.axis[i * 3], ay = this.axis[i * 3 + 1], az = this.axis[i * 3 + 2];
 
-      const d = camera.distance - v[2];
-      const s = camera.distance / d;
-      const p = this.projected[i];
-      p.x = camera.cx + v[0] * s * camera.ppu;
-      p.y = camera.cyScreen - v[1] * s * camera.ppu;
-      p.major = r.radius * s * camera.ppu;
-
-      // e: from the ring toward the eye. m: the ring's normal. Both view space, unit length.
-      const dl = Math.hypot(v[0], v[1], d) || 1;
-      const ex = -v[0] / dl, ey = -v[1] / dl, ez = d / dl;
-      const nl = Math.hypot(v[3], v[4], v[5]) || 1;
-      const mx = v[3] / nl, my = v[4] / nl, mz = v[5] / nl;
-      const facing = mx * ex + my * ey + mz * ez;
-
-      // Facing the eye → full circle; edge-on → a line.
-      p.minor = p.major * Math.abs(facing);
-
-      // U: the ring's diameter seen at full length (normal × eye). V completes the ring's plane.
-      let ux = my * ez - mz * ey;
-      let uy = mz * ex - mx * ez;
-      let uz = mx * ey - my * ex;
-      let ul = Math.hypot(ux, uy, uz);
-      if (ul < 1e-5) {
-        // Face-on: any in-plane direction will do.
-        ux = mz; uy = 0; uz = -mx;
-        ul = Math.hypot(ux, uz);
-        if (ul < 1e-5) { ux = 1; uz = 0; ul = 1; }
-      }
-      ux /= ul; uy /= ul; uz /= ul;
-      p.rotation = Math.atan2(-uy, ux);
-
-      const ca = Math.cos(p.rotation) * p.major;
-      const sa = Math.sin(p.rotation) * p.major;
-      this.ends[i * 4] = p.x + ca;
-      this.ends[i * 4 + 1] = p.y + sa;
-      this.ends[i * 4 + 2] = p.x - ca;
-      this.ends[i * 4 + 3] = p.y - sa;
-
-      this.visible[i] = 1;
-      p.arcStart = 0;
-      p.arcEnd = TAU;
-      if (solid) {
-        let vx = my * uz - mz * uy;
-        let vy = mz * ux - mx * uz;
-        let vz = mx * uy - my * ux;
-        let ve = vx * ex + vy * ey + vz * ez;
-        if (ve < 0) { vx = -vx; vy = -vy; vz = -vz; ve = -ve; }
-
-        // A point at angle φ around the ring (U at 0, V at 90°) faces the eye
-        // when sin φ · (V·e) > taper · (m·e): the surface tilts toward m as
-        // the body narrows, which is why a dome's top ring shows whole.
-        const bias = this.topo[i].taper * facing;
-        const k = ve > 1e-5 ? bias / ve : bias < 0 ? -2 : 2;
-        if (k >= 1) {
-          this.visible[i] = 0;
-        } else if (k > -1) {
-          const phi = Math.asin(k);
-          // Canvas sweeps from the major axis toward +90°; does V land there or at -90° on screen?
-          const flip = ux * -vy - -uy * vx < 0;
-          if (flip) {
-            p.arcStart = -(Math.PI - phi);
-            p.arcEnd = -phi;
-          } else {
-            p.arcStart = phi;
-            p.arcEnd = Math.PI - phi;
-          }
+      for (let k = 0; k < m; k++) {
+        const ik = (s0 + k) * 3;
+        const kp = (s0 + ((k + m - 1) % m)) * 3, kn = (s0 + ((k + 1) % m)) * 3;
+        // Around the ring.
+        const ux = view[kn] - view[kp], uy = view[kn + 1] - view[kp + 1], uz = view[kn + 2] - view[kp + 2];
+        // Along the body (same point index on the neighboring rings).
+        let wx = ax, wy = ay, wz = az;
+        if (lo !== hi) {
+          const a = (this.start[lo] + k) * 3, b = (this.start[hi] + k) * 3;
+          wx = view[b] - view[a];
+          wy = view[b + 1] - view[a + 1];
+          wz = view[b + 2] - view[a + 2];
         }
+        let nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+        // Outward: away from the ring's center.
+        if (nx * (view[ik] - cx) + ny * (view[ik + 1] - cy) + nz * (view[ik + 2] - cz) < 0) {
+          nx = -nx; ny = -ny; nz = -nz;
+        }
+        const ex = -view[ik], ey = -view[ik + 1], ez = dist - view[ik + 2];
+        facing[s0 + k] = (nx * ex + ny * ey + nz * ez) / ((Math.hypot(nx, ny, nz) || 1) * (Math.hypot(ex, ey, ez) || 1));
       }
 
-      this.depth[i] = d;
-      if (d < dMin) dMin = d;
-      if (d > dMax) dMax = d;
+      // Silhouette: the two points farthest apart across the body's screen direction.
+      let dx = ax, dy = -ay;
+      const dl = Math.hypot(dx, dy);
+      if (dl < 1e-6) { dx = 1; dy = 0; } else { dx /= dl; dy /= dl; }
+      const qx = -dy, qy = dx;
+      let mn = Infinity, mx = -Infinity, iL = s0, iR = s0;
+      for (let k = 0; k < m; k++) {
+        const d = screen[(s0 + k) * 2] * qx + screen[(s0 + k) * 2 + 1] * qy;
+        if (d < mn) { mn = d; iL = s0 + k; }
+        if (d > mx) { mx = d; iR = s0 + k; }
+      }
+      this.silL[i] = iL;
+      this.silR[i] = iR;
     }
-    return { dMin, dMax };
   }
 
   private bucketOf(i: number) {
     // Clamped both ways: depth is stored as Float32, so `near` can land a hair outside 0–1.
-    return Math.max(0, Math.min(BUCKETS - 1, Math.floor(this.projected[i].near * BUCKETS)));
+    return Math.max(0, Math.min(BUCKETS - 1, Math.floor(this.near[i] * BUCKETS)));
+  }
+
+  /** The whole ring as one closed run. */
+  private addWhole(i: number, lineWidth: number) {
+    const m = this.size[i];
+    this.mark.addRun(this.ctx, this.screen.subarray(this.start[i] * 2, (this.start[i] + m) * 2), m, true, lineWidth);
+  }
+
+  /** Each stretch of the ring that faces the eye, with ends trimmed to where facing crosses zero. */
+  private addVisible(i: number, lineWidth: number) {
+    const { facing, screen, run } = this;
+    const s0 = this.start[i], m = this.size[i];
+    let firstHidden = -1;
+    for (let k = 0; k < m; k++) if (facing[s0 + k] <= 0) { firstHidden = k; break; }
+    if (firstHidden < 0) {
+      this.addWhole(i, lineWidth);
+      return;
+    }
+    let n = 0;
+    const flush = () => {
+      if (n >= 2) this.mark.addRun(this.ctx, run, n, false, lineWidth);
+      n = 0;
+    };
+    const push = (x: number, y: number) => {
+      run[n * 2] = x;
+      run[n * 2 + 1] = y;
+      n++;
+    };
+    for (let j = 1; j <= m; j++) {
+      const k = s0 + ((firstHidden + j) % m);
+      const kPrev = s0 + ((firstHidden + j - 1) % m);
+      const fv = facing[k], fp = facing[kPrev];
+      if (fv > 0 && fp <= 0) {
+        // Entering: start exactly at the crossing.
+        const t = fp / (fp - fv);
+        push(lerp(screen[kPrev * 2], screen[k * 2], t), lerp(screen[kPrev * 2 + 1], screen[k * 2 + 1], t));
+        push(screen[k * 2], screen[k * 2 + 1]);
+      } else if (fv > 0) {
+        push(screen[k * 2], screen[k * 2 + 1]);
+      } else if (fp > 0) {
+        // Leaving: end exactly at the crossing.
+        const t = fp / (fp - fv);
+        push(lerp(screen[kPrev * 2], screen[k * 2], t), lerp(screen[kPrev * 2 + 1], screen[k * 2 + 1], t));
+        flush();
+      }
+    }
+    flush();
   }
 
   /** See-through: one path per depth bucket. */
@@ -268,48 +395,46 @@ export class Renderer {
         ctx.lineWidth = this.styles[b].lineWidth;
         ctx.beginPath();
       }
-      this.mark.addToPath(ctx, this.projected[i], this.styles[b].lineWidth);
+      this.addWhole(i, this.styles[b].lineWidth);
     }
     if (bucket >= 0) this.paintPath();
   }
 
-  /** Opaque body: erase what this ring's slice of body hides, then draw its visible arc. */
+  /** Opaque body: erase what this ring's slice of body hides, then draw what of it faces the eye. */
   private paintSolid(background: string, transparent: boolean) {
-    const { ctx, projected, ends, depth } = this;
+    const { ctx, screen, depth } = this;
     for (const i of this.order) {
-      const p = projected[i];
-
-      // Erase: the cross-section, plus the band to each neighbor that is
-      // nearer than this ring (that band sits at this ring's depth or behind).
       ctx.globalCompositeOperation = transparent ? 'destination-out' : 'source-over';
       ctx.fillStyle = transparent ? '#000' : background;
+
+      // The cross-section.
+      const s0 = this.start[i], m = this.size[i];
       ctx.beginPath();
-      ctx.ellipse(p.x, p.y, p.major, Math.max(p.minor, 0.01), p.rotation, 0, TAU);
+      ctx.moveTo(screen[s0 * 2], screen[s0 * 2 + 1]);
+      for (let k = 1; k < m; k++) ctx.lineTo(screen[(s0 + k) * 2], screen[(s0 + k) * 2 + 1]);
+      ctx.closePath();
       ctx.fill();
-      // Each band is filled on its own: sharing a path with the ellipse, opposite windings would cancel into holes.
-      for (const j of [this.topo[i].prev, this.topo[i].next]) {
+
+      // The band to each neighbor that is nearer than this ring (that band sits at
+      // this ring's depth or behind). Filled on its own so windings can't cancel.
+      for (const j of [this.prev[i], this.next[i]]) {
         if (j < 0 || depth[j] > depth[i]) continue;
-        const a = i * 4;
-        // Pair silhouette ends that point the same way, so the band never twists into a bow tie.
-        const same = Math.cos(p.rotation - projected[j].rotation) >= 0;
-        const b = j * 4 + (same ? 0 : 2);
-        const b2 = j * 4 + (same ? 2 : 0);
+        const a = this.silL[i] * 2, b = this.silL[j] * 2, c = this.silR[j] * 2, d = this.silR[i] * 2;
         ctx.beginPath();
-        ctx.moveTo(ends[a], ends[a + 1]);
-        ctx.lineTo(ends[b], ends[b + 1]);
-        ctx.lineTo(ends[b2], ends[b2 + 1]);
-        ctx.lineTo(ends[a + 2], ends[a + 3]);
+        ctx.moveTo(screen[a], screen[a + 1]);
+        ctx.lineTo(screen[b], screen[b + 1]);
+        ctx.lineTo(screen[c], screen[c + 1]);
+        ctx.lineTo(screen[d], screen[d + 1]);
         ctx.closePath();
         ctx.fill();
       }
 
-      if (!this.visible[i]) continue;
       ctx.globalCompositeOperation = 'source-over';
       const style = this.styles[this.bucketOf(i)];
       ctx.strokeStyle = ctx.fillStyle = style.color;
       ctx.lineWidth = style.lineWidth;
       ctx.beginPath();
-      this.mark.addToPath(ctx, p, style.lineWidth);
+      this.addVisible(i, style.lineWidth);
       this.paintPath();
     }
     ctx.globalCompositeOperation = 'source-over';

@@ -22,7 +22,7 @@ export interface Settings {
     far: string;
   };
   camera: {
-    /** Distance from the character; smaller = stronger perspective. */
+    /** Distance from the character, in character radii; smaller = stronger perspective. */
     distance: number;
     /** Looking down on the character, radians. */
     pitch: number;
@@ -50,7 +50,7 @@ export type ExperienceOptionsInput = DeepPartial<ExperienceOptions>;
 export const defaultSettings: Settings = {
   density: 1,
   strokeWeight: 0.9,
-  depthFade: 0.72,
+  depthFade: 0.45,
   solid: true,
   colors: {
     background: '#060b1a',
@@ -58,9 +58,9 @@ export const defaultSettings: Settings = {
     far: '#4a7fd4',
   },
   camera: {
-    distance: 14,
-    pitch: 0.85,
-    yaw: -1.0,
+    distance: 2.6,
+    pitch: 1.25,
+    yaw: 0.5,
     framing: 0.9,
   },
 };
