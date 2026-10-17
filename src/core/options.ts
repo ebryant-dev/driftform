@@ -21,6 +21,22 @@ export interface Settings {
     /** Stroke color of the farthest rings. */
     far: string;
   };
+  motion: {
+    /** Overall speed of idle life (breathing, undulation, drift). 0 freezes it. */
+    idleSpeed: number;
+    /** How much the breathing parts swell and shrink (fraction of their size). */
+    breath: number;
+    /** Strength of the slow waves that travel down each arm. */
+    undulation: number;
+    /** How far the whole character bobs and turns as it hangs in the medium. */
+    drift: number;
+    /** How freely each ring floats off its place on the body (0 = locked on). */
+    looseness: number;
+    /** Spring pulling the body toward its moving pose; higher = tighter, quicker. */
+    stiffness: number;
+    /** Share of its motion the body keeps each frame; lower = thicker water. */
+    damping: number;
+  };
   camera: {
     /** Distance from the character, in character radii; smaller = stronger perspective. */
     distance: number;
@@ -56,6 +72,15 @@ export const defaultSettings: Settings = {
     background: '#060b1a',
     near: '#f7f2ea',
     far: '#4a7fd4',
+  },
+  motion: {
+    idleSpeed: 1,
+    breath: 0.05,
+    undulation: 1,
+    drift: 1,
+    looseness: 0.5,
+    stiffness: 30,
+    damping: 0.92,
   },
   camera: {
     distance: 2.6,

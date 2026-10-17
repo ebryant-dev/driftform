@@ -1,4 +1,6 @@
 import { characters, type CharacterDef } from '../characters';
+import { SoftBody, STEP } from './body';
+import { Idle } from './idle';
 import { Loop } from './loop';
 import { lineMark } from './marks/line';
 import { defaultOptions, merge, type ExperienceOptions, type ExperienceOptionsInput } from './options';
@@ -33,21 +35,47 @@ export function createExperience(container: HTMLElement, input: ExperienceOption
 
   const renderer = new Renderer(canvas, lineMark);
   let character: CharacterDef;
-  let pos: Float32Array;
+  let body: SoftBody;
+  let idle: Idle;
+  let target: Float32Array;
+  let time = 0; // animation time, scaled by idle speed
+  let carry = 0; // physics time not yet stepped
 
   const build = () => {
     character = characters[options.character]({ density: options.settings.density });
-    pos = new Float32Array(character.rest);
+    body = new SoftBody(character);
+    idle = new Idle(character);
+    target = new Float32Array(character.rest);
     renderer.setCharacter(character);
+    idle.pose(time, options.settings.motion, target);
+    body.settle(target);
+    idle.rings(time, options.settings.motion);
   };
 
-  const draw = () => renderer.draw(character, pos, options.settings, options.transparent);
+  const draw = () => renderer.draw(character, body.pos, options.settings, options.transparent, idle.fx);
+
+  /** Advance the medium and the body by `dt` seconds of real time. */
+  const advance = (dt: number) => {
+    const motion = options.settings.motion;
+    carry += dt;
+    let steps = 0;
+    while (carry >= STEP && steps < 8) {
+      time += STEP * motion.idleSpeed;
+      idle.pose(time, motion, target);
+      body.step(target, motion);
+      carry -= STEP;
+      steps++;
+    }
+    if (steps === 8) carry = 0; // fell far behind (slow device or long stall): drop the backlog
+    idle.rings(time, motion);
+  };
 
   let cssW = 0;
   let cssH = 0;
-  const loop = new Loop(() => {
+  const loop = new Loop((dt) => {
     // Cheap no-op unless devicePixelRatio changed (window dragged to another display).
     renderer.resize(cssW, cssH, options.maxDpr);
+    advance(dt);
     draw();
   });
 

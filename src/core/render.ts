@@ -2,6 +2,7 @@ import type { CharacterDef } from '../characters';
 import type { Settings } from './options';
 import type { MarkStyle } from './marks/types';
 import { Camera } from './camera';
+import type { RingFx } from './idle';
 import { hexToRgb, lerp } from './math';
 
 /** Depth buckets: stroke color, alpha and width are quantized to this many steps. */
@@ -199,7 +200,7 @@ export class Renderer {
     return [x / l, y / l, z / l];
   }
 
-  draw(character: CharacterDef, pos: Float32Array, settings: Settings, transparent: boolean) {
+  draw(character: CharacterDef, pos: Float32Array, settings: Settings, transparent: boolean, fx?: RingFx) {
     const { ctx, camera } = this;
     camera.update(settings.camera, this.width, this.height, character.center, character.extent);
 
@@ -212,7 +213,7 @@ export class Renderer {
       ctx.fillRect(0, 0, this.width, this.height);
     }
 
-    this.project(character, pos);
+    this.project(character, pos, fx);
     this.shade();
 
     // Back to front.
@@ -233,7 +234,7 @@ export class Renderer {
   }
 
   /** Place every ring's contour in view space and on screen. */
-  private project(character: CharacterDef, pos: Float32Array) {
+  private project(character: CharacterDef, pos: Float32Array, fx?: RingFx) {
     const camera = this.camera;
     const rings = character.rings;
     const n = this.count;
@@ -244,7 +245,8 @@ export class Renderer {
     for (let i = 0; i < n; i++) {
       const r = rings[i];
       for (let k = 0; k < 3; k++) {
-        wc[i * 3 + k] = pos[r.a * 3 + k] + (pos[r.b * 3 + k] - pos[r.a * 3 + k]) * r.t + this.offset[i * 3 + k];
+        wc[i * 3 + k] =
+          pos[r.a * 3 + k] + (pos[r.b * 3 + k] - pos[r.a * 3 + k]) * r.t + this.offset[i * 3 + k] + (fx ? fx.offset[i * 3 + k] : 0);
       }
     }
 
@@ -270,8 +272,9 @@ export class Renderer {
       this.depth[i] = camera.distance - this.center[i * 3 + 2];
 
       const s0 = this.start[i], m = this.size[i];
+      const sc = fx ? fx.scale[i] : 1;
       for (let k = 0; k < m; k++) {
-        const x = this.shape[(s0 + k) * 2], y = this.shape[(s0 + k) * 2 + 1];
+        const x = this.shape[(s0 + k) * 2] * sc, y = this.shape[(s0 + k) * 2 + 1] * sc;
         camera.toView(cx + N0 * x + B0 * y, cy + N1 * x + B1 * y, cz + N2 * x + B2 * y, this.view, (s0 + k) * 3);
         const vx = this.view[(s0 + k) * 3], vy = this.view[(s0 + k) * 3 + 1], vz = this.view[(s0 + k) * 3 + 2];
         const s = camera.distance / (camera.distance - vz);

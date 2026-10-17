@@ -45,6 +45,19 @@ export interface RingDef extends BodyCoord {
   shape?: RingShape;
 }
 
+/**
+ * How a character comes alive at rest. The engine applies these to whatever
+ * parts a character names, so it never needs to know what an arm or a mantle is.
+ */
+export interface MotionHints {
+  /** The part everything else hangs from (it has no parent). Other parts attach to it, or to each other, through links. */
+  trunk: string;
+  /** Parts (or stretches of them, by u) that swell and shrink as the character breathes. */
+  breathe?: { part: string; from: number; to: number }[];
+  /** Undulation strength per part; parts left out don't undulate (they still follow their parent). */
+  sway?: Record<string, number>;
+}
+
 export interface CharacterDef {
   name: string;
   /** Rest pose, xyz interleaved, world units (y up, +z toward the viewer). */
@@ -55,6 +68,7 @@ export interface CharacterDef {
   /** Center and radius of the rest pose's bounding sphere, used for framing. */
   center: [number, number, number];
   extent: number;
+  motion?: MotionHints;
 }
 
 export interface CharacterParams {
