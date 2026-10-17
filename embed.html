@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Driftform embed test</title>
+    <style>
+      /* A stand-in for a site hero: the host owns the layout, the sky and the copy. */
+      body { margin: 0; font-family: system-ui, sans-serif; color: #f7f2ea; background: #f7f2ea; }
+      .hero { position: relative; min-height: 100vh; overflow: hidden;
+        background: radial-gradient(120% 90% at 70% 40%, #0c193f 0%, #060b1a 55%, #030509 100%); }
+      .hero-art { position: absolute; inset: 0 0 0 35%; }
+      .hero-copy { position: relative; z-index: 1; max-width: 32rem; padding: 18vh 6vw 0; }
+      .hero-copy h1 { font-size: clamp(2rem, 5vw, 3.5rem); margin: 0 0 1rem; font-weight: 600; }
+      .hero-copy p { line-height: 1.5; opacity: 0.85; }
+      .hero-copy a { display: inline-block; margin-top: 1rem; padding: 0.8rem 1.3rem; border-radius: 999px;
+        background: #f5c842; color: #1a1000; text-decoration: none; font-weight: 600; }
+      .below { padding: 4rem 6vw; color: #1a1a2e; min-height: 120vh; }
+      @media (max-width: 640px) { .hero-art { inset: 30% 0 0 0; } }
+    </style>
+  </head>
+  <body>
+    <section class="hero" id="hero">
+      <div class="hero-art" id="hero-art"></div>
+      <div class="hero-copy">
+        <h1>I am <em>Edward Hamel,</em></h1>
+        <p>A test hero. The canvas sits behind this copy with a transparent background, sized by its container rather than the window.</p>
+        <a href="#below">A button on top</a>
+      </div>
+    </section>
+    <section class="below" id="below">
+      <h2>Below the fold</h2>
+      <p>Scroll here: the experience pauses itself once the hero is offscreen.</p>
+    </section>
+    <script type="module" src="/src/embed.ts"></script>
+  </body>
+</html>

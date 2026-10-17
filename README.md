@@ -2,7 +2,7 @@
 
 An interactive generative-art piece. An octopus made of soft 3D contour rings floats in water you never see — you only feel it through how the octopus moves when you disturb it.
 
-> Work in progress. Phase 1a: the octopus renders at rest. Motion, the medium and play arrive in later phases.
+> Work in progress. Phase 1a: the octopus renders at rest from 3D contour rings. Motion, the medium and play arrive in later phases.
 
 ## Run it
 
