@@ -25,8 +25,8 @@ A creature or figure defined purely as data: its rings, how they link, and its r
 _Avoid_: model, sprite, figure
 
 **Ring**:
-One contour circle in 3D space around part of a character's body (mantle or tentacle). It is drawn as an ellipse.
-_Avoid_: point, particle, ellipse (the ellipse is only how a ring appears on screen)
+One closed contour line around a cross-section of a character's body, like a slice through it. Its shape comes from the sculpted form, so it isn't necessarily round.
+_Avoid_: point, particle, ellipse, circle, slice (the slice is how a ring is made, not what it is)
 
 **Mark style**:
 How each ring is drawn on screen: a projected ellipse (the default), a dotted ring, or later glyphs. Changing the mark style never changes how the character moves.
