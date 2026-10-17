@@ -11,6 +11,8 @@ export interface Settings {
   strokeWeight: number;
   /** 0 = far rings as strong as near ones, 1 = far rings nearly vanish. */
   depthFade: number;
+  /** Solid: an opaque body showing only the front arcs of its rings. Off: ghost, every ring whole. */
+  solid: boolean;
   colors: {
     /** Medium color behind the character (ignored when `transparent`). */
     background: string;
@@ -47,8 +49,9 @@ export type ExperienceOptionsInput = DeepPartial<ExperienceOptions>;
 
 export const defaultSettings: Settings = {
   density: 1,
-  strokeWeight: 1.25,
+  strokeWeight: 0.9,
   depthFade: 0.72,
+  solid: true,
   colors: {
     background: '#060b1a',
     near: '#f7f2ea',
@@ -56,8 +59,8 @@ export const defaultSettings: Settings = {
   },
   camera: {
     distance: 14,
-    pitch: 0.42,
-    yaw: -0.35,
+    pitch: 0.85,
+    yaw: -1.0,
     framing: 0.9,
   },
 };

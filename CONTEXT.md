@@ -32,6 +32,14 @@ _Avoid_: point, particle, ellipse (the ellipse is only how a ring appears on scr
 How each ring is drawn on screen: a projected ellipse (the default), a dotted ring, or later glyphs. Changing the mark style never changes how the character moves.
 _Avoid_: skin, theme, render mode
 
+**Solid**:
+The look where the character's body is opaque: each ring shows only the arc facing the viewer, and nearer parts of the body hide farther ones.
+_Avoid_: occluded, hidden-line mode, opaque mode
+
+**Ghost**:
+The see-through look: every ring is drawn whole, front and back.
+_Avoid_: transparent (that word belongs to the host background), wireframe, x-ray
+
 **Rest pose**:
 The shape a character drifts back toward when the medium is calm.
 _Avoid_: default shape, base mesh

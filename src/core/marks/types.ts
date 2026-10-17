@@ -7,6 +7,9 @@ export interface ProjectedRing {
   minor: number;
   rotation: number;
   near: number;
+  /** The visible part of the ellipse, as canvas ellipse angles. 0…2π when the whole ring shows. */
+  arcStart: number;
+  arcEnd: number;
 }
 
 /**
