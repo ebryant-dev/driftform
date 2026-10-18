@@ -25,11 +25,11 @@ A creature or figure defined purely as data: its rings, how they link, and its r
 _Avoid_: model, sprite, figure
 
 **Ring**:
-One closed contour line around a cross-section of a character's body, like a slice through it. Its shape comes from the sculpted form, so it isn't necessarily round.
-_Avoid_: point, particle, ellipse, circle, slice (the slice is how a ring is made, not what it is)
+One contour line around a character's body, like a line on a topographic map. Rings are evenly spaced along the body and flow without a break from the mantle into the arms.
+_Avoid_: point, particle, ellipse, circle, slice
 
 **Mark style**:
-How each ring is drawn on screen: a projected ellipse (the default), a dotted ring, or later glyphs. Changing the mark style never changes how the character moves.
+How each ring is drawn on screen: a solid line (the default), a dotted line, or later glyphs. Changing the mark style never changes how the character moves.
 _Avoid_: skin, theme, render mode
 
 **Solid**:
@@ -39,6 +39,10 @@ _Avoid_: occluded, hidden-line mode, opaque mode
 **Ghost**:
 The see-through look: every ring is drawn whole, front and back.
 _Avoid_: transparent (that word belongs to the host background), wireframe, x-ray
+
+**Flow coordinate**:
+How far along the body a point on its surface is, measured from the arm crown up through the mantle and out along each arm. Rings are drawn where it crosses evenly spaced values.
+_Avoid_: u, distance field, parameter
 
 **Rest pose**:
 The shape a character drifts back toward when the medium is calm.

@@ -1,8 +1,8 @@
-// A character is pure data: soft-body nodes with rest positions, the links
-// between them, and the rings that hang on those nodes. The engine never
-// knows which creature it's drawing.
+// A character is pure data: a sculpted mesh with per-vertex skinning and
+// flow data, the soft-body nodes it's skinned to, and the links between
+// them (ADR 0003). The engine never knows which creature it's drawing.
 
-/** Where a node or ring sits on the body: which part, and how far along it (0–1). */
+/** Where a node sits on the body: which part, and how far along it (0–1). */
 export interface BodyCoord {
   /** e.g. 'body', 'arm3'. Shared names let two characters be matched for the trickle. */
   part: string;
@@ -18,34 +18,6 @@ export interface LinkDef {
 }
 
 /**
- * A ring's contour at rest: closed 2D points in the ring's own plane. The
- * plane is centered on `c` and spanned by `N` and `B` (= T × N), where T is
- * the direction along the body. Rings in one part share a point count and a
- * starting angle, so together they form a surface grid.
- */
-export interface RingShape {
-  /** x, y pairs in the (N, B) plane. */
-  pts: Float32Array;
-  c: [number, number, number];
-  N: [number, number, number];
-  /** Point indices never drawn (still part of the outline that hides what's behind). */
-  hide?: number[];
-}
-
-/**
- * One contour ring. It hangs between nodes `a` and `b` at `t`, so it follows
- * the body as the nodes move. Ring density is independent of node count.
- * Without a `shape`, the ring is a circle of `radius`.
- */
-export interface RingDef extends BodyCoord {
-  a: number;
-  b: number;
-  t: number;
-  radius: number;
-  shape?: RingShape;
-}
-
-/**
  * How a character comes alive at rest. The engine applies these to whatever
  * parts a character names, so it never needs to know what an arm or a mantle is.
  */
@@ -56,24 +28,43 @@ export interface MotionHints {
   breathe?: { part: string; from: number; to: number }[];
   /** Undulation strength per part; parts left out don't undulate (they still follow their parent). */
   sway?: Record<string, number>;
+  /** Parts that open and close together in a slow pulse, like an octopus's web. */
+  pulse?: string[];
+  /** Per part: how much of its sculpted tip curl relaxes open at rest (0 = keeps its curl). */
+  uncurl?: Record<string, number>;
+}
+
+/** The sculpted surface, ready for the GPU. Layout matches tools/bake_octopus.py. */
+export interface CharacterMesh {
+  vertices: number;
+  /** int16 xyz, quantized within [bboxMin, bboxMax]. */
+  position: Int16Array;
+  /** Per vertex: node a1, b1, a2, b2 (two chain segments). */
+  attach: Uint8Array;
+  /** Per vertex: t1, t2 (along each segment) and w (weight of the first), 0–255. */
+  weights: Uint8Array;
+  /** Per vertex: ring index along the body, quantized to 0–65535 of flowMax. */
+  flow: Uint16Array;
+  /** Per vertex: 2D position on the nearest eye's plane, quantized to ±32000 of eyeRadius (32767 = not near an eye). */
+  eye: Int16Array;
+  indices: Uint16Array | Uint32Array;
+  bboxMin: [number, number, number];
+  bboxMax: [number, number, number];
+  flowMax: number;
+  eyeRadius: number;
 }
 
 export interface CharacterDef {
   name: string;
-  /** Rest pose, xyz interleaved, world units (y up, +z toward the viewer). */
+  /** Rest pose of the nodes, xyz interleaved, world units (y up, +z toward the viewer). */
   rest: Float32Array;
   nodes: NodeDef[];
   links: LinkDef[];
-  rings: RingDef[];
+  mesh: CharacterMesh;
   /** Center and radius of the rest pose's bounding sphere, used for framing. */
   center: [number, number, number];
   extent: number;
   motion?: MotionHints;
 }
 
-export interface CharacterParams {
-  /** Ring density multiplier; 1 is the designed default. */
-  density: number;
-}
-
-export type CharacterFactory = (params: CharacterParams) => CharacterDef;
+export type CharacterFactory = () => Promise<CharacterDef>;

@@ -40,6 +40,16 @@ export class Camera {
     out[o + 2] = y * this.sp + z1 * this.cp;
   }
 
+  /** The world → view rotation as three row vectors (the same rotation as `rotate`). */
+  rows(): [number[], number[], number[]] {
+    const { cy, sy, cp, sp } = this;
+    return [
+      [cy, 0, sy],
+      [sy * sp, cp, -cy * sp],
+      [-sy * cp, sp, cy * cp],
+    ];
+  }
+
   /** World point → view space, relative to the character's center. */
   toView(x: number, y: number, z: number, out: Float32Array, o: number) {
     this.rotate(x - this.center[0], y - this.center[1], z - this.center[2], out, o);

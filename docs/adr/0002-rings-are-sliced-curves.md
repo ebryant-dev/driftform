@@ -1,5 +1,7 @@
 # Rings are cross-section curves sliced from a sculpted mesh, not 3D circles
 
+**Superseded by [ADR 0003](0003-webgl-contour-shader.md).** The sculpted mesh stays; slicing it into stored rings does not.
+
 The original brief defined a ring as a circle in 3D space (center, orientation, radius), projected to an ellipse. Phase 1a built exactly that, and the octopus came out as tubes on a stick: every cross-section round, the parts unable to blend at junctions, no web between the arms, and contour lines that restart at every part boundary. The form we want (the reference image in the planning folder) is one continuous sculpted surface whose contour lines flow from the mantle into the arms. So a character's rings are now closed cross-section curves of any shape, sliced at build time from a mesh sculpted in Blender. They're stored in the character's data file as points in each ring's local frame, and attached to the soft-body nodes as before.
 
 ## Considered Options

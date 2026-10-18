@@ -5,13 +5,13 @@ import type { CharacterName } from '../characters';
  * tuning panel exports as JSON, so tuned values can become the defaults.
  */
 export interface Settings {
-  /** Ring density multiplier. Rebuilds the character when changed. */
+  /** Ring density multiplier: 1 is the designed spacing, 2 doubles the rings. Live, costs nothing. */
   density: number;
   /** Stroke width in CSS px for the nearest rings. */
   strokeWeight: number;
   /** 0 = far rings as strong as near ones, 1 = far rings nearly vanish. */
   depthFade: number;
-  /** Solid: an opaque body showing only the front arcs of its rings. Off: ghost, every ring whole. */
+  /** Solid: an opaque body showing only rings on the side facing you. Off: ghost, back rings show faintly through. */
   solid: boolean;
   colors: {
     /** Medium color behind the character (ignored when `transparent`). */
@@ -30,8 +30,10 @@ export interface Settings {
     undulation: number;
     /** How far the whole character bobs and turns as it hangs in the medium. */
     drift: number;
-    /** How freely each ring floats off its place on the body (0 = locked on). */
+    /** How much the surface shimmers, so the form never quite holds still (0 = still). */
     looseness: number;
+    /** Strength of the web pulse: arms gathering beneath the body and spreading again. */
+    pulse: number;
     /** Spring pulling the body toward its moving pose; higher = tighter, quicker. */
     stiffness: number;
     /** Share of its motion the body keeps each frame; lower = thicker water. */
@@ -65,7 +67,7 @@ export type ExperienceOptionsInput = DeepPartial<ExperienceOptions>;
 
 export const defaultSettings: Settings = {
   density: 1,
-  strokeWeight: 0.9,
+  strokeWeight: 1.1,
   depthFade: 0.45,
   solid: true,
   colors: {
@@ -79,6 +81,7 @@ export const defaultSettings: Settings = {
     undulation: 1,
     drift: 1,
     looseness: 0.5,
+    pulse: 1,
     stiffness: 30,
     damping: 0.92,
   },

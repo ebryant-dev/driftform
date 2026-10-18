@@ -22,7 +22,8 @@ export class SoftBody {
     const { rest, nodes } = character;
     this.pos = new Float32Array(rest);
     this.prev = new Float32Array(rest);
-    this.weight = new Float32Array(nodes.map((n) => lerp(1, 0.3, n.u)));
+    // Tips are held loosely, so they trail and whip rather than hold their shape.
+    this.weight = new Float32Array(nodes.map((n) => lerp(1, 0.12, Math.pow(n.u, 0.8))));
     this.links = new Int32Array(character.links.flatMap((l) => [l.a, l.b]));
     this.lengths = new Float32Array(character.links.length);
     character.links.forEach((l, i) => {
