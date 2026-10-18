@@ -89,46 +89,68 @@ uniform float uEyeRadius;
 uniform float uDist, uExtent, uDepthFade;
 uniform vec3 uNearColor, uFarColor;
 uniform float uBackFade;    // ghost: how faint back-facing lines are (1 = same)
+uniform float uBackPass;    // 1 while drawing the hidden far side as a faint glow
+uniform float uBackGlow;    // strength of that glow
 
 out vec4 outColor;
 
 // Antialiased line where v crosses a whole number, constant width in pixels.
-// Lines fade out where they crowd closer than a few pixels (grazing angles),
-// instead of turning to moire.
+float ringsAt(float v, float fw, float halfw) {
+  float d = abs(fract(v + 0.5) - 0.5) / max(fw, 1e-5);
+  return 1.0 - smoothstep(halfw - 0.5, halfw + 0.5, d);
+}
+
+// Rings with level of detail: where they'd crowd closer than a few pixels
+// (thin tips, grazing angles), keep every 2nd, 4th, ... ring instead, blending
+// between levels, so the form stays drawn instead of fading to moire or nothing.
 float rings(float v, float halfw) {
   float fw = fwidth(v);
-  float d = abs(fract(v + 0.5) - 0.5) / max(fw, 1e-5);
-  float a = 1.0 - smoothstep(halfw - 0.5, halfw + 0.5, d);
-  return a * (1.0 - smoothstep(0.18, 0.45, fw));
+  float l = log2(max(fw / 0.22, 1.0));
+  float l0 = floor(l);
+  float s0 = exp2(l0), s1 = s0 * 2.0;
+  float a0 = ringsAt(v / s0, fw / s0, halfw);
+  float a1 = ringsAt(v / s1, fw / s1, halfw);
+  return mix(a0, a1, smoothstep(0.0, 1.0, fract(l)));
 }
 
 void main() {
   // Depth 0 (near) .. 1 (far) across the character.
   float depth = clamp((-vView.z + uExtent) / (2.0 * uExtent), 0.0, 1.0);
-  float halfw = uHalfWidth * mix(1.0, 0.45, depth);
+  float halfw = uHalfWidth * mix(1.0, 0.6, depth);
 
   float a = rings(vFlow * uDensity, halfw);
 
   // Eyes: concentric rings on the turret and a slit pupil; body rings give way there.
-  float er = length(vEye) / uEyeRadius;
+  // Almond-shaped: wider than tall, like the reference's lids.
+  float er = length(vEye / vec2(1.0, 0.62)) / uEyeRadius;
   if (er < 1.0) {
     float inEye = 1.0 - smoothstep(0.7, 1.0, er);
-    float eyeRings = rings(er * 4.0, halfw) * step(0.6, er * 4.0);
+    float eyeRings = rings(er * 3.0, halfw) * step(0.6, er * 3.0);
     float slit = length(vEye / vec2(0.36 * uEyeRadius, 0.08 * uEyeRadius));
     float pupil = rings(slit, halfw) * step(slit, 1.5);
     a = mix(a, max(eyeRings, pupil), inEye);
   }
 
-  // Facing, from the surface's screen-space normal: lines toward the silhouette
-  // tint toward the far color, like rim light.
+  // Facing, from the surface's screen-space normal. Lines that face you read
+  // cream; toward the silhouette and in the depths they turn blue, like the reference.
   vec3 n = normalize(cross(dFdx(vView), dFdy(vView)));
   vec3 toEye = normalize(vec3(0.0, 0.0, uDist) - vView);
-  float facing = dot(n, toEye);
-  float rim = 1.0 - abs(facing);
+  float facing = abs(dot(n, toEye));
+  float rim = pow(1.0 - facing, 1.6);
   if (!gl_FrontFacing) a *= uBackFade;
 
-  vec3 col = mix(uNearColor, uFarColor, clamp(depth * 0.8 + rim * rim * 0.6, 0.0, 1.0));
+  // A soft light from the upper left and in front: lit surfaces read white,
+  // turned-away ones deepen to blue.
+  vec3 L = normalize(vec3(-0.45, 0.6, 0.65));
+  float lit = clamp(dot(n * sign(dot(n, toEye)), L), 0.0, 1.0);
+  float blue = clamp(rim * 0.9 + (1.0 - lit) * 0.75 + depth * 0.2 - 0.25, 0.0, 1.0);
+  vec3 col = mix(uNearColor, uFarColor, blue);
   float alpha = a * (1.0 - uDepthFade * depth);
+  if (uBackPass > 0.5) {
+    // The far side, seen through the body: a faint blue glow.
+    col = uFarColor;
+    alpha = a * uBackGlow * (1.0 - 0.5 * depth);
+  }
   outColor = vec4(col * alpha, alpha);
 }
 `;
@@ -177,6 +199,7 @@ export class GLRenderer {
     for (const name of [
       'uNodes', 'uBboxMin', 'uBboxMax', 'uFlowMax', 'uEyeRadius', 'uCenter', 'uRot0', 'uRot1', 'uRot2', 'uDist', 'uNear', 'uFar',
       'uClip', 'uTime', 'uShimmer', 'uDensity', 'uHalfWidth', 'uExtent', 'uDepthFade', 'uNearColor', 'uFarColor', 'uBackFade',
+      'uBackPass', 'uBackGlow',
     ]) {
       this.u[name] = gl.getUniformLocation(prog, name);
     }
@@ -329,13 +352,22 @@ export class GLRenderer {
       gl.colorMask(false, false, false, false);
       gl.drawElements(gl.TRIANGLES, this.indexCount, this.indexType, 0);
       gl.colorMask(true, true, true, true);
-      gl.depthFunc(gl.LEQUAL);
       gl.depthMask(false);
       gl.uniform1f(u.uBackFade, 1);
+      if (settings.backGlow > 0) {
+        // The hidden far side, faintly, behind everything in front.
+        gl.depthFunc(gl.GREATER);
+        gl.uniform1f(u.uBackPass, 1);
+        gl.uniform1f(u.uBackGlow, settings.backGlow);
+        gl.drawElements(gl.TRIANGLES, this.indexCount, this.indexType, 0);
+      }
+      gl.depthFunc(gl.LEQUAL);
+      gl.uniform1f(u.uBackPass, 0);
       gl.drawElements(gl.TRIANGLES, this.indexCount, this.indexType, 0);
       gl.depthMask(true);
     } else {
       gl.disable(gl.DEPTH_TEST);
+      gl.uniform1f(u.uBackPass, 0);
       gl.uniform1f(u.uBackFade, 0.45);
       gl.drawElements(gl.TRIANGLES, this.indexCount, this.indexType, 0);
     }

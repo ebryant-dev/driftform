@@ -13,6 +13,8 @@ export interface Settings {
   depthFade: number;
   /** Solid: an opaque body showing only rings on the side facing you. Off: ghost, back rings show faintly through. */
   solid: boolean;
+  /** Solid only: how strongly the hidden far side glows through in blue (0 = fully hidden). */
+  backGlow: number;
   colors: {
     /** Medium color behind the character (ignored when `transparent`). */
     background: string;
@@ -66,14 +68,15 @@ export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartia
 export type ExperienceOptionsInput = DeepPartial<ExperienceOptions>;
 
 export const defaultSettings: Settings = {
-  density: 1,
-  strokeWeight: 1.1,
-  depthFade: 0.45,
+  density: 1.35,
+  strokeWeight: 0.8,
+  depthFade: 0.25,
   solid: true,
+  backGlow: 0.22,
   colors: {
     background: '#060b1a',
-    near: '#f7f2ea',
-    far: '#4a7fd4',
+    near: '#f4f1ff',
+    far: '#3d5fe0',
   },
   motion: {
     idleSpeed: 1,
@@ -88,7 +91,7 @@ export const defaultSettings: Settings = {
   camera: {
     distance: 2.6,
     pitch: 1.25,
-    yaw: 0.5,
+    yaw: -0.6,
     framing: 0.9,
   },
 };
