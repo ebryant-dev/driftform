@@ -377,6 +377,20 @@ def main():
     # distance into its own ring count (denser where it's thin).
     mouth = np.argsort(np.linalg.norm(verts - np.array([ns["CX"], ns["CY"], ns["CZ"] - 0.12]), axis=1))[:12]
     dist = heat_geodesic(verts, tris, mouth)
+    # On the body, plain distance from the mouth peaks on top of the head (the
+    # wave climbing the front meets the one climbing the back), which draws a
+    # small closed loop between the eyes. Measuring progress from the mouth
+    # toward the mantle tip instead, (d_mouth - d_tip + D) / 2, climbs steadily
+    # along the body and can't peak in between.
+    tip = np.argsort(np.linalg.norm(verts - body_line[-1], axis=1))[:12]
+    dist_tip = heat_geodesic(verts, tris, tip)
+    span = float(np.median(dist[tip]))
+    toward_tip = np.clip(0.5 * (dist - dist_tip + span), 0, None)
+    # Near the mouth and web keep plain distance, so the body agrees with the arms
+    # where they blend; switch over higher up the head, where the peak was.
+    k = np.clip((dist - 0.15) / 0.2, 0, 1)
+    k = k * k * (3 - 2 * k)
+    body_dist = dist * (1 - k) + toward_tip * k
     for ch in chains:
         # Ring count as a function of distance from the crown along this chain.
         s_along = arclength(ch["line"]) + np.linalg.norm(ch["line"][0] - crown)
@@ -386,9 +400,10 @@ def main():
         f = np.interp(d, xs, ys)
         return f + np.maximum(d - xs[-1], 0) / ARM_SPACING_MIN  # past the end (tip cap)
     for ci in range(len(chains)):
+        d = body_dist if ci == 0 else dist
         m1, m2 = chain1 == ci, chain2 == ci
-        flow[m1] += wgt[m1] * ring_count(ci, dist[m1])
-        flow[m2] += (1 - wgt[m2]) * ring_count(ci, dist[m2])
+        flow[m1] += wgt[m1] * ring_count(ci, d[m1])
+        flow[m2] += (1 - wgt[m2]) * ring_count(ci, d[m2])
     print(f"geodesic: max distance {dist.max():.3f}, flow max {flow.max():.1f}")
 
     # Eye coordinates.

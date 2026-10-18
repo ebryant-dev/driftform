@@ -90,8 +90,8 @@ export const defaultSettings: Settings = {
   },
   camera: {
     distance: 2.6,
-    pitch: 1.25,
-    yaw: -0.6,
+    pitch: 0.8,
+    yaw: -0.7,
     framing: 0.9,
   },
 };
